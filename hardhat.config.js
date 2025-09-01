@@ -8,6 +8,14 @@
 // - COINMARKETCAP: coinmarketcap api key for USD value in gas report
 // - CI:            output gas report to file instead of stdout
 
+require('dotenv').config();
+
+// Defensive fix patch: Prevent future plugin conflicts causing undefined/null conversion errors
+// Conflicts currently resolved through plugin loading order, but keeping this fix to prevent future plugin ecosystem changes
+if (process.env.USE_POLKAVM === "true") {
+  require('./polkadot-fix.js');
+}
+
 const fs = require('fs');
 const path = require('path');
 
@@ -58,18 +66,39 @@ const { argv } = require('yargs/yargs')()
 
   const usePolkaVM = process.env.USE_POLKAVM === "true";
 
+// Validate PolkaVM configuration
+if (usePolkaVM) {
+  const nodePath = process.env.POLKAVM_NODE_PATH || "../revive-dev-node";
+  const adapterPath = process.env.POLKAVM_ADAPTER_PATH || "../eth-rpc";
+  console.log(`PolkaVM enabled - Node: ${nodePath}, Adapter: ${adapterPath}`);
+}
+
+// Plugin loading order optimization: hardhat-polkadot loaded last to avoid configuration conflicts
+// This order ensures hardhat-polkadot can properly handle other plugins' configuration expectations
 require('@nomicfoundation/hardhat-chai-matchers');
 require('@nomicfoundation/hardhat-ethers');
-// require('hardhat-exposed');
+require('hardhat-exposed');
 require('hardhat-gas-reporter');
 // require('hardhat-ignore-warnings');
 require('hardhat-predeploy');
 require('solidity-coverage');
 require('solidity-docgen');
+// Critical: hardhat-polkadot must be loaded last to properly override and handle configuration conflicts
 require('@parity/hardhat-polkadot');
 
-for (const f of fs.readdirSync(path.join(__dirname, 'hardhat'))) {
-  require(path.join(__dirname, 'hardhat', f));
+// Custom task file loading: Selectively load to avoid specific conflicts
+const hardhatDir = path.join(__dirname, 'hardhat');
+const hardhatFiles = fs.readdirSync(hardhatDir);
+
+for (const f of hardhatFiles) {
+  // Skip files with known conflicts in PolkaVM mode
+  if (usePolkaVM && f === 'common-contracts.js') {
+    console.log(`Skipping ${f} in PolkaVM mode to avoid conflicts`);
+    continue;
+  }
+  
+  console.log(`Loading hardhat task file: ${f}`);
+  require(path.join(hardhatDir, f));
 }
 
 /**
@@ -90,11 +119,12 @@ module.exports = {
   },
   resolc: {
     compilerSource: "binary",
+    resolcPath: "resolc-0.3.0",
     settings: {
       optimizer: {
         enabled: true,
         runs: argv.runs,
-        compilerPath: "resolc-0.3.0",
+
       },
     },
   },
@@ -114,12 +144,12 @@ module.exports = {
     ? {
         polkavm: true,
         nodeConfig: {
-          nodeBinaryPath: "../revive-dev-node",
-          rpcPort: 8000,
+          nodeBinaryPath: process.env.POLKAVM_NODE_PATH || "../revive-dev-node",
+          rpcPort: parseInt(process.env.POLKAVM_RPC_PORT) || 8000,
           dev: true,
         },
         adapterConfig: {
-          adapterBinaryPath: "../eth-rpc",
+          adapterBinaryPath: process.env.POLKAVM_ADAPTER_PATH || "../eth-rpc",
           dev: true,
         },
       }
@@ -131,14 +161,32 @@ module.exports = {
       initialBaseFeePerGas: argv.coverage ? 0 : undefined,
       enableRip7212: true,
     },
+    local: {
+      polkavm: true,
+      url: `http://127.0.0.1:8545`,
+      accounts: [
+        process.env.LOCAL_PRIV_KEY ??
+        "0x5fb92d6e98884f76de468fa3f6278f8807c48bebc13595d45af5bdc4da702133",
+        process.env.AH_PRIV_KEY ?? '',
+      ],
+    },
   },
-  // exposed: {
-  //   imports: true,
-  //   initializers: true,
-  //   exclude: ['vendor/**/*', '**/*WithInit.sol'],
-  // },
+  exposed: {
+    imports: true,
+    initializers: true,
+    exclude: [
+      'vendor/**/*', 
+      '**/*WithInit.sol',
+      // Exclude contracts with EXTCODECOPY usage for Polkadot compatibility
+      ...(usePolkaVM ? [
+        '**/EIP7702Utils.sol',  // Uses account.code directly
+        '**/Clones.sol',         // Uses instance.code.length
+        // Add more as needed based on compilation errors
+      ] : [])
+    ],
+  },
   gasReporter: {
-    enabled: argv.gas,
+    enabled: argv.gas,  // PolkaVM mode also supports gas reporting (implemented through plugin order optimization)
     showMethodSig: true,
     includeBytecodeInJSON: true,
     currency: 'USD',

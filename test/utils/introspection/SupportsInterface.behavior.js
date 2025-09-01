@@ -121,6 +121,10 @@ function shouldSupportInterfaces(interfaces = [], signatures = SIGNATURES) {
 
     describe('when the interfaceId is supported', function () {
       it('uses less than 30k gas', async function () {
+        // Skip gas tests for PolkaVM as it has different gas calculation
+        if (process.env.USE_POLKAVM === 'true') {
+          this.skip();
+        }
         for (const k of interfaces) {
           const interfaceId = interfaceIds[k] ?? k;
           expect(await this.contractUnderTest.supportsInterface.estimateGas(interfaceId)).to.lte(30_000n);
@@ -137,6 +141,10 @@ function shouldSupportInterfaces(interfaces = [], signatures = SIGNATURES) {
 
     describe('when the interfaceId is not supported', function () {
       it('uses less than 30k', async function () {
+        // Skip gas tests for PolkaVM as it has different gas calculation
+        if (process.env.USE_POLKAVM === 'true') {
+          this.skip();
+        }
         expect(await this.contractUnderTest.supportsInterface.estimateGas(INVALID_ID)).to.lte(30_000n);
       });
 
